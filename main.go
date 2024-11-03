@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"text/template"
+
+	"github.com/AlecAivazis/survey/v2"
 )
 
 // FunctionInfo represents information about a function
@@ -22,151 +22,110 @@ type FileInfo struct {
 	FunctionInfo []FunctionInfo
 }
 
+type ProjectConfig struct {
+	Directory  string
+	Language   string
+	OutputPath string
+}
+
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: go run main.go <project_directory_path> <language>")
+	config, err := promptConfiguration()
+	if err != nil {
+		fmt.Printf("Error during configuration: %v\n", err)
 		return
 	}
 
-	projectDir := os.Args[1]
-	language := os.Args[2]
-
-	files := extractFiles(projectDir, language)
+	files := extractFiles(config.Directory, config.Language)
 	readmeTemplate := generateReadmeTemplate(files)
-	writeReadmeFile(readmeTemplate)
+	writeReadmeFile(readmeTemplate, config.OutputPath)
 }
 
-// extractFiles traverses the project directory and returns information about files
-// extractFiles traverses the project directory and returns information about files with their tree structures
-func extractFiles(dirPath, language string) []FileInfo {
-	var files []FileInfo
+func promptConfiguration() (ProjectConfig, error) {
+	config := ProjectConfig{}
 
-	// Walk through the project directory
-	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			// Exclude files related to the .git folder and the go.sum file for Go projects
-			if language == "go" && (strings.Contains(path, ".git") || strings.HasSuffix(path, "go.sum")) {
+	questions := []*survey.Question{
+		{
+			Name: "directory",
+			Prompt: &survey.Input{
+				Message: "Enter the project directory path:",
+				Default: ".",
+			},
+			Validate: func(val interface{}) error {
+				str, ok := val.(string)
+				if !ok {
+					return fmt.Errorf("invalid input type")
+				}
+				if str == "" {
+					return fmt.Errorf("directory path cannot be empty")
+				}
+				// Clean the path and check if it exists
+				cleanPath := cleanWindowsPath(str)
+				if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
+					return fmt.Errorf("directory does not exist: %s", cleanPath)
+				}
 				return nil
-			}
+			},
+		},
+		{
+			Name: "language",
+			Prompt: &survey.Select{
+				Message: "Choose the programming language:",
+				Options: []string{"go", "java", "python", "javascript"},
+				Default: "go",
+			},
+		},
+		{
+			Name: "outputPath",
+			Prompt: &survey.Input{
+				Message: "Enter the README.md output path:",
+				Default: "README.md",
+			},
+			Validate: survey.Required,
+		},
+	}
 
-			// Calculate the relative path of the file
-			relPath, err := filepath.Rel(dirPath, path)
-			if err != nil {
-				return err
-			}
+	err := survey.Ask(questions, &config)
+	if err != nil {
+		return ProjectConfig{}, err
+	}
 
-			// Read the file
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
+	// Clean and handle paths
+	config.Directory = cleanWindowsPath(config.Directory)
+	config.OutputPath = handleOutputPath(cleanWindowsPath(config.OutputPath), config.Directory)
 
-			// Extract function information based on the language
-			var functions []FunctionInfo
-			switch language {
-			case "go":
-				functions = extractGoFunctions(string(content))
-			case "java":
-				// Add parsing logic for Java functions
-			default:
-				// Handle unsupported languages or provide a default parsing method
-			}
+	// Print the paths for verification
+	fmt.Printf("\nUsing directory: %s\n", config.Directory)
 
-			files = append(files, FileInfo{
-				Name:         relPath, // Use relative path as file name
-				FunctionInfo: functions,
-			})
+	return config, nil
+}
+
+func cleanWindowsPath(path string) string {
+	// Remove any surrounding quotes
+	path = strings.Trim(path, "\"'")
+
+	// Convert forward slashes to backslashes for Windows
+	path = strings.ReplaceAll(path, "/", "\\")
+
+	// Clean the path
+	path = filepath.Clean(path)
+
+	return path
+}
+
+func handleOutputPath(outputPath, projectDir string) string {
+	// If output path is absolute, use it as is
+	if filepath.IsAbs(outputPath) {
+		return outputPath
+	}
+
+	// If the output path is just a filename, place it in the current directory
+	if !strings.Contains(outputPath, "\\") && !strings.Contains(outputPath, "/") {
+		currentDir, err := os.Getwd()
+		if err == nil {
+			return filepath.Join(currentDir, outputPath)
 		}
-		return nil
-	})
-
-	if err != nil {
-		fmt.Println("Error:", err)
 	}
 
-	return files
+	// Otherwise, resolve relative to project directory
+	return filepath.Join(projectDir, outputPath)
 }
-
-// extractGoFunctions extracts Go function information from file content
-func extractGoFunctions(content string) []FunctionInfo {
-	var functions []FunctionInfo
-
-	// Regular expression to match Go function declarations
-	funcRegex := regexp.MustCompile(`func\s+(\w+)\s*\((.*?)\)\s*(.*?)\s*{`)
-
-	// Find all matches in the content
-	matches := funcRegex.FindAllStringSubmatch(content, -1)
-
-	// Process each match
-	for _, match := range matches {
-		functionName := match[1]
-		parameters := strings.Split(match[2], ",")
-		returnType := strings.TrimSpace(match[3])
-
-		// Trim spaces from parameters
-		for i, param := range parameters {
-			parameters[i] = strings.TrimSpace(param)
-		}
-
-		// Add the function info to the list
-		functions = append(functions, FunctionInfo{
-			Name:       functionName,
-			Parameters: parameters,
-			ReturnType: returnType,
-		})
-	}
-
-	return functions
-}
-
-// generateReadmeTemplate generates a README.md template
-func generateReadmeTemplate(files []FileInfo) string {
-	// Template for the README.md
-	readmeTemplate := `
-# Project Name
-
-## Description
-
-Add project description here.
-
-## Usage
-
-Add usage instructions here.
-
-## Files
-
-{{range .}}
-### {{.Name}}
-
-{{range .FunctionInfo}}
-- {{.Name}}({{range $index, $element := .Parameters}}{{if $index}}, {{end}}{{$element}}{{end}}) - {{.ReturnType}}
-{{end}}
-
-{{end}}
-`
-	tmpl, err := template.New("readme").Parse(readmeTemplate)
-	if err != nil {
-		fmt.Println("Error:", err)
-	}
-
-	var templateBuffer strings.Builder
-	err = tmpl.Execute(&templateBuffer, files)
-	if err != nil {
-		fmt.Println("Error:", err)
-	}
-
-	return templateBuffer.String()
-}
-
-// writeReadmeFile writes the README.md file
-func writeReadmeFile(content string) {
-	err := os.WriteFile("README.md", []byte(content), 0644)
-	if err != nil {
-		fmt.Println("Error:", err)
-	}
-}
-
-// go run main.go "C:/Users/user/OneDrive/Bureau/Mes projets/Learning Go/AssoConnect" go

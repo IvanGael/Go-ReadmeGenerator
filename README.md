@@ -1,8 +1,6 @@
 Readme Generator Built in Go
 
-### Features
-- Generate readme.md file based on choosed language
-
+Generate readme.md file based on choosed language
 
 # Install
 
@@ -17,22 +15,18 @@ Go 1.21.4
 2. Build binary
 
 ```
-go build main.go;
+go build .;
 ```
 
 3. Run the build
 
 ```
-main
+ReadmeGenerator
 ```
 
 
 # Usage
 
-Type from commandline
-
-Example:
-
 ```
-go run main.go <project_directory_path> <language>
+go run .
 ```
